@@ -79,6 +79,33 @@ def mo_ta_co_so() -> str:
     return ", ".join(f"{TEN_NGAN[y]} {YT[y]['nhan'][YT[y]['co_so']]}" for y in BIEU_PHI["thu_tu_yeu_to"])
 
 
+def he_so_bonus_malus(so_nam_khong_tai_nan: int) -> int:
+    """Hệ số BonusMalus theo quy tắc của Pháp: bắt đầu từ 100, mỗi năm không gây tai nạn nhân 0,95
+    (làm tròn xuống), thấp nhất 50. Ví dụ: 0 năm → 100, 1 → 95, 5 → 76, 10 → 57, từ 13 năm → 50."""
+    he_so = 100
+    for _ in range(so_nam_khong_tai_nan):
+        he_so = max(50, he_so * 95 // 100)
+    return he_so
+
+
+# Nhóm mật độ dân số trong biểu phí -> mô tả dễ hiểu cho người dùng
+LOAI_NOI_O = {
+    "≤ 50": "Nông thôn, làng xã (dưới 50 người/km²)",
+    "51–100": "Thị trấn nhỏ (50–100 người/km²)",
+    "101–500": "Thị trấn, ngoại ô thưa (100–500 người/km²)",
+    "501–2.000": "Thành phố nhỏ, ngoại ô đông (500–2.000 người/km²)",
+    "2.001–10.000": "Thành phố lớn (2.000–10.000 người/km²)",
+    "> 10.000": "Trung tâm đô thị lớn như Paris (trên 10.000 người/km²)",
+}
+
+
+def mat_do_dai_dien(nhom: str) -> int:
+    """Một giá trị mật độ thuộc nhóm đã chọn (cận trên của nhóm) để đưa vào hàm tính phí."""
+    can_tren = YT["Density"]["can_tren"]
+    i = YT["Density"]["nhom"].index(nhom)
+    return can_tren[i] if can_tren[i] is not None else can_tren[i - 1] + 1
+
+
 # ------------------------------------------------------------------ đầu trang
 st.title("Định phí bảo hiểm TNDS xe cơ giới")
 st.caption("Mô hình GLM: tần suất (Poisson) × mức bồi thường (Gamma), xây dựng trên bộ dữ liệu freMTPL2 – danh mục "
@@ -101,12 +128,13 @@ cot_nhap, cot_ket_qua = st.columns([2, 3], gap="large")
 with cot_nhap:
     with st.form("form_tinh_phi"):
         st.markdown("**Người lái**")
-        a, b = st.columns(2)
-        tuoi = a.number_input("Tuổi người lái", min_value=18, max_value=100, value=28, step=1)
-        bonus_malus = b.number_input(
-            "Hệ số BonusMalus", min_value=50, max_value=230, value=68, step=1,
-            help="Hệ số thưởng/phạt của Pháp: 100 khi mới tham gia, giảm 5% mỗi năm không gây tai nạn "
-                 "(thấp nhất 50), tăng 25% mỗi vụ có lỗi. Càng thấp càng tốt.")
+        tuoi = st.number_input("Tuổi người lái", min_value=18, max_value=100, value=28, step=1)
+        so_nam_khong_tai_nan = st.number_input(
+            "Số năm có bảo hiểm liên tục mà không gây tai nạn", min_value=0, max_value=50, value=7, step=1,
+            help="Mua bảo hiểm lần đầu: nhập 0. Mỗi năm không gây tai nạn có lỗi, hệ số BonusMalus giảm 5% "
+                 "(bắt đầu từ 100, thấp nhất 50 sau 13 năm).")
+        bonus_malus = he_so_bonus_malus(so_nam_khong_tai_nan)
+        st.caption(f"→ Hệ số BonusMalus tương ứng: **{bonus_malus}** (100 khi mới mua bảo hiểm, thấp nhất 50)")
         st.markdown("**Xe**")
         a, b = st.columns(2)
         tuoi_xe = a.number_input("Tuổi xe (năm)", min_value=0, max_value=60, value=4, step=1)
@@ -118,11 +146,13 @@ with cot_nhap:
         nhien_lieu = b.radio("Nhiên liệu", YT["VehGas"]["nhom"], format_func=lambda g: YT["VehGas"]["nhan"][g],
                              index=YT["VehGas"]["nhom"].index("Diesel"), horizontal=True)
         st.markdown("**Nơi ở**")
-        a, b = st.columns(2)
-        mat_do = a.number_input("Mật độ dân số (người/km²)", min_value=1, max_value=30000, value=1500, step=50,
-                                help="Tham khảo: nông thôn dưới 50, thị trấn vài trăm, thành phố lớn vài nghìn, "
-                                     "nội đô Paris khoảng 20.000.")
-        vung = b.selectbox("Vùng", YT["Region"]["nhom"], index=YT["Region"]["nhom"].index("Ile-de-France"))
+        ds_nhom_mat_do = YT["Density"]["nhom"]
+        nhom_mat_do = st.selectbox(
+            "Loại nơi ở", ds_nhom_mat_do,
+            index=ds_nhom_mat_do.index("501–2.000") if "501–2.000" in ds_nhom_mat_do else 0,
+            format_func=lambda g: LOAI_NOI_O.get(g, f"{g} người/km²"),
+            help="Khu vực nơi người lái sống; mỗi loại ứng với một khoảng mật độ dân số trong biểu phí.")
+        vung = st.selectbox("Vùng", YT["Region"]["nhom"], index=YT["Region"]["nhom"].index("Ile-de-France"))
         st.markdown("**Phụ phí** (tính trên phí bán)")
         a, b = st.columns(2)
         ty_le_chi_phi = a.slider("Chi phí (%)", min_value=0, max_value=40, value=20,
@@ -131,7 +161,7 @@ with cot_nhap:
         st.form_submit_button("Tính phí", type="primary")
 
 ho_so = {"DrivAge": tuoi, "BonusMalus": bonus_malus, "VehAge": tuoi_xe, "VehPower": cong_suat,
-         "VehBrand": hang_xe, "VehGas": nhien_lieu, "Density": mat_do, "Region": vung}
+         "VehBrand": hang_xe, "VehGas": nhien_lieu, "Density": mat_do_dai_dien(nhom_mat_do), "Region": vung}
 kq = tinh_phi(BIEU_PHI, ho_so, ty_le_chi_phi / 100, ty_le_loi_nhuan / 100)
 nhom_kh = {r["yeu_to"]: r["nhom"] for r in kq["chi_tiet"]}
 chenh_tb = kq["phi_thuan"] / DM["phi_thuan"] - 1
